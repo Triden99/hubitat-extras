@@ -1,7 +1,8 @@
 /**
  *  Radio Thermostat CT50 WiFi driver.
  *
- *  Author: Statusbits.com. Hubitat conversion by cometfish
+ *  Author: Statusbits.com. Hubitat conversion by cometfish,
+ *  Updated: Reliability changes for Hubitat by Triden99
  *
  *  --------------------------------------------------------------------------
  *
@@ -24,7 +25,7 @@
  *
  */
 metadata {
-    definition (name:"Radio Thermostat", namespace:"statusbits", author:"geko@statusbits.com", importUrl: "https://github.com/cometfish/hubitat_driver_radio_thermostat/master/radio_thermostat.groovy") {
+    definition (name:"Radio Thermostat NG", namespace:"triden99", author:"geko@statusbits.com", importUrl: "https://github.com/cometfish/hubitat_driver_radio_thermostat/master/radio_thermostat.groovy") {
         capability "Initialize"
         capability "Thermostat"
         capability "TemperatureMeasurement"
@@ -56,6 +57,7 @@ metadata {
         attribute "fanState", "string"      // Fan operating state. Values: "on", "off"
         attribute "hold", "string"          // Target temperature Hold status. Values: "on", "off"
         attribute "connection", "string"    // Connection status string
+        attribute "status", "enum", ["active", "failed"]  // Device status regarding HTTP_POST
 
         // Custom commands
         command "temperatureUp"
@@ -102,6 +104,7 @@ def initialize() {
     sendEvent(name:'fanState', value:'off', isStateChange: true)
     sendEvent(name:'hold', value:'off', isStateChange: true)
     sendEvent(name:'connection', value:'disconnected', isStateChange: true)
+    sendEvent(name:'status', value:'active', isStateChange: true)
 }
 
 def updated() {
@@ -131,13 +134,15 @@ def updated() {
     state.hostAddress = "${settings.confIpAddr}:${settings.confTcpPort}"
     state.requestTime = 0
     state.responseTime = 0
+    state.retryPostCount = 0
+    state.lastApiPostPending = false
 
     startPollingTask()
     //STATE()
 }
 
 def pollingTask() {
-    //log.debug "pollingTask()"
+    log.debug "pollingTask()"
 
     state.lastPoll = now()
 
@@ -154,6 +159,22 @@ def pollingTask() {
         ])
     }
 
+    if (state.lastApiPostPending) {
+        log.info "lastApiPostPending found"
+        if (state.retryPostCount >= 5) {
+            log.error "Failed to write 5 times."
+            sendEvent([
+                    name:           'status',
+                    value:          'failed',
+                    isStateChange:  true,
+                    displayed:      true
+            ])
+        }
+        state.retryPostCount += 1
+        log.warn "Sending HTTP_POST retry #${state.retryPostCount}"
+        sendHubCommand(apiPost(state.lastApiPostPending[0], state.lastApiPostPending[1]))
+        // return or NOT? FIXME
+    }
     def updated = state.updated ?: 0
     if ((now() - updated) > 10000) {
         sendHubCommand(apiGet("/tstat"))
@@ -569,13 +590,14 @@ private apiGet(String path) {
 }
 
 private apiPost(String path, data) {
-    //log.debug "apiPost(${path}, ${data})"
+    log.debug "apiPost(${path}, ${data})"
 
     if (!updateDNI()) {
         return null
     }
 
     state.requestTime = now()
+    state.lastApiPostPending =  [path, data]
 
     def headers = [
             HOST:       state.hostAddress,
@@ -634,6 +656,9 @@ private def parseTstatData(Map tstat) {
     }
 
     if (tstat.containsKey("success")) {
+        log.trace "tstat response is success"
+        state.retryPostCount = 0
+        state.lastApiPostPending = false
         // this is POST response - ignore
         return null
     }
@@ -821,11 +846,11 @@ private updateDNI() {
 }
 
 private def printTitle() {
-    log.info "Radio Thermostat. ${textVersion()}. ${textCopyright()}"
+    log.info "Radio Thermostat ND. ${textVersion()}. ${textCopyright()}"
 }
 
 private def textVersion() {
-    return "Version 2.0.1 (12/20/2016)"
+    return "Version 3.0.0 (06/04/2025)"
 }
 
 private def textCopyright() {
